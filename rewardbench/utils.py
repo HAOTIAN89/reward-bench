@@ -387,6 +387,7 @@ def load_eval_dataset(
                     {"role": "user", "content": example["prompt"]},
                     {"role": "assistant", "content": example["rejected"]},
                 ]
+                example["text_subset"] = example["subset"]
             else:
                 prompt = example["prompt"]
                 example["text_chosen"] = prompt + [{"role": "assistant", "content": example["chosen"]}]

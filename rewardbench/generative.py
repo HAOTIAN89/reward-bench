@@ -155,6 +155,27 @@ MTBENCH_V2 = {
     "output_format": "[[A]]",
 }
 
+prompt_pair_scalar_v1 = (
+    "Please act as an impartial judge and evaluate the quality of the responses provided by two AI assistants to the user question displayed below. "
+    "You should choose the assistant that follows the user's instructions and answers the user's question better. Your evaluation should consider "
+    "factors such as the helpfulness, relevance, accuracy, depth, creativity, and level of detail of their responses. Begin your evaluation by "
+    "comparing the two responses and provide a short explanation. Avoid any position biases and ensure that the order in which the responses were "
+    "presented does not influence your decision. Do not allow the length of the responses to influence your evaluation. Do not favor certain names "
+    "of the assistants. Be as objective as possible. After providing your explanation, output your final verdict by assigning scores to each answer: "
+    "and presenting them in the following format: \\boxed{{score_A, score_B}} where score_A is the evaluation score for Assistant A's answer (0-10) "
+    "and score_B is the evaluation score for Assistant B's answer (0-10)."
+)
+
+MTBENCH_Scalar_V1 = {
+    "name": "pair-scalar-v1",
+    "type": "pairwise",
+    "system_prompt": prompt_pair_scalar_v1,
+    "prompt_template": "[User Question]\n{question}\n\n[The Start of Assistant A's Answer]\n{answer_a}\n[The End of Assistant A's Answer]\n\n[The Start of Assistant B's Answer]\n{answer_b}\n[The End of Assistant B's Answer]",
+    "description": "Prompt for general questions",
+    "category": "general",
+    "output_format": "boxed{10, 7}",
+}
+
 MTBENCH_MULTI_V2 = {
     "name": "pair-v2-multi-turn",
     "type": "pairwise",
@@ -293,7 +314,7 @@ Response B:
 
 
 # format with prompt_template.format(question=question, answer_a=answer_a, answer_b=answer_b)
-def format_judge_answers(question, answer_a, answer_b, multi_turn=False, model_modifier=None):
+def format_judge_answers(question, answer_a, answer_b, scalar=False, multi_turn=False, model_modifier=None):
     kwargs = {}
     if model_modifier == "prometheus":
         if multi_turn:
@@ -354,13 +375,22 @@ def format_judge_answers(question, answer_a, answer_b, multi_turn=False, model_m
                 **kwargs,
             )
         else:
-            system_prompt = MTBENCH_V2["system_prompt"]
-            user_prompt = MTBENCH_V2["prompt_template"].format(
-                question=question,
-                answer_a=answer_a[1]["content"],
-                answer_b=answer_b[1]["content"],
-                **kwargs,
-            )
+            if scalar:
+                system_prompt = MTBENCH_Scalar_V1["system_prompt"]
+                user_prompt = MTBENCH_Scalar_V1["prompt_template"].format(
+                    question=question,
+                    answer_a=answer_a[1]["content"],
+                    answer_b=answer_b[1]["content"],
+                    **kwargs,
+                )
+            else:
+                system_prompt = MTBENCH_V2["system_prompt"]
+                user_prompt = MTBENCH_V2["prompt_template"].format(
+                    question=question,
+                    answer_a=answer_a[1]["content"],
+                    answer_b=answer_b[1]["content"],
+                    **kwargs,
+                )
 
     # gemini adds what was the system prompt before the content, and has no system prompt
     if model_modifier == "gemini":
@@ -463,7 +493,7 @@ def con_j_evaluate(gen):
     return "None"
 
 
-def process_judgement(judgment, model_modifier):
+def process_judgement(judgment, model_modifier, scalar=False):
     if model_modifier == "prometheus":
         if "[RESULT]" in judgment:
             # after [RESULT] is A or B, else error (mayube spaces)
@@ -493,6 +523,20 @@ def process_judgement(judgment, model_modifier):
             if match:
                 result = match.group(1).strip()
                 return result if result else "error"
+    elif scalar:
+        # scalar output is boxed{10, 7} or similar
+        cleaned = re.sub(r"\\boxed{+(\d+),\s*(\d+)}+", r"\\boxed{\1, \2}", judgment)
+        match = re.search(r"\\boxed{(\d+),\s*(\d+)}", cleaned)
+        if match:
+            score_a = int(match.group(1))
+            score_b = int(match.group(2))
+            if score_a > score_b:
+                return "A"
+            elif score_b > score_a:
+                return "B"
+            else:
+                return "error"
+        return "error"
     else:
         if "[[A]]" in judgment:
             return "A"
@@ -503,9 +547,9 @@ def process_judgement(judgment, model_modifier):
 
 
 # noqa adapted from FastChat https://github.com/lm-sys/FastChat/blob/b015f21cb9d0cf3c87d2a5e53008074c537e8be0/fastchat/llm_judge/common.py#L235C1-L312C1
-def run_judge_pair(question, answer_a, answer_b, model, multi_turn=False, model_modifier=None):
+def run_judge_pair(question, answer_a, answer_b, model, scalar=False, multi_turn=False, model_modifier=None):
     system_prompt, user_prompt = format_judge_answers(
-        question, answer_a, answer_b, multi_turn, model_modifier=model_modifier
+        question, answer_a, answer_b, scalar, multi_turn, model_modifier=model_modifier
     )
     winner = "error"
 
@@ -561,7 +605,7 @@ def run_judge_pair(question, answer_a, answer_b, model, multi_turn=False, model_
     else:
         raise ValueError(f"Model {model} not supported")
 
-    winner = process_judgement(judgment, model_modifier)
+    winner = process_judgement(judgment, model_modifier, scalar)
     return winner, user_prompt, judgment
 
 

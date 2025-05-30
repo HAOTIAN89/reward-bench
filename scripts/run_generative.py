@@ -93,6 +93,12 @@ def get_args():
     parser.add_argument(
         "--force_local", action="store_true", default=False, help="force local run, even if model is on Together API"
     )
+    parser.add_argument(
+        "--scalar", action="store_true", default=False, help="use scalar pairwise prompt to make model output two scores"
+    )
+    parser.add_argument(
+        "--use_weighted", action="store_true", default=False, help="use weight scalar token to compute the final scalar score"
+    )
     args = parser.parse_args()
     return args
 
@@ -188,7 +194,7 @@ def main():
         custom_dialogue_formatting=True,  # handle formatting later
         tokenizer=None,
         logger=logger,
-        keep_columns=["text_chosen", "text_rejected", "id"],
+        keep_columns=["text_chosen", "text_rejected", "id", "text_subset"],
         max_turns=4,
     )
 
@@ -231,7 +237,7 @@ def main():
             if len(batch["text_chosen"]) <= 4:  # set up only for 1 or 2 turns
                 if not args.score_w_ratings:
                     winner, request, judgement = run_judge_pair(
-                        prompt, answer_a, answer_b, args.model, multi_turn=mult_turn, model_modifier=model_modifier
+                        prompt, answer_a, answer_b, args.model, args.scalar, multi_turn=mult_turn, model_modifier=model_modifier
                     )
                     if debug:
                         print(f"Prompt: {request}")
@@ -305,7 +311,7 @@ def main():
                 answer_a, answer_b = answer_b, answer_a
 
             system_prompt, user_prompt = format_judge_answers(
-                prompt, answer_a, answer_b, multi_turn=mult_turn, model_modifier=model_modifier
+                prompt, answer_a, answer_b, scalar=args.scalar, multi_turn=mult_turn, model_modifier=model_modifier
             )
 
             if optional_chat_template is not None:
@@ -355,7 +361,7 @@ def main():
         logger.info("*** Inference done ***")
 
         answers = [o.outputs[0].text for o in outputs]
-        winners = [process_judgement(a, model_modifier) for a in answers]
+        winners = [process_judgement(a, model_modifier, args.scalar) for a in answers]
 
         def process_shuffled(win, shuffle):
             if shuffle:
