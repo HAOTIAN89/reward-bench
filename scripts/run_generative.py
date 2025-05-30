@@ -43,6 +43,8 @@ from rewardbench.generative import (
     run_judge_ratings,
 )
 from rewardbench.utils import calculate_scores_per_section
+from dotenv import load_dotenv
+load_dotenv()
 
 # get token from HF_TOKEN env variable, but if it doesn't exist pass none
 HF_TOKEN = os.getenv("HF_TOKEN", None)
@@ -181,7 +183,7 @@ def main():
     ############################
     logger.info("*** Load dataset ***")
     dataset, subsets = load_eval_dataset(
-        core_set=not args.pref_sets,
+        core_set=not args.pref_sets, # 2990 samples for core set
         conv=get_conv_template("raw"),  # not used in this script (handled later)
         custom_dialogue_formatting=True,  # handle formatting later
         tokenizer=None,

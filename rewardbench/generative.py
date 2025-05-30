@@ -92,7 +92,14 @@ GEMINI_MODEL_LIST = (
     "gemini-1.5-flash-8b-exp-0827",
 )
 
-API_MODEL_LIST = OPENAI_MODEL_LIST + ANTHROPIC_MODEL_LIST + TOGETHER_MODEL_LIST + GEMINI_MODEL_LIST
+# DeepSeek models
+DEEPSEEK_MDOEL_LIST = (
+    "deepseek-chat",
+    "deepseek-reasoner"
+)
+    
+
+API_MODEL_LIST = OPENAI_MODEL_LIST + ANTHROPIC_MODEL_LIST + TOGETHER_MODEL_LIST + GEMINI_MODEL_LIST + DEEPSEEK_MDOEL_LIST
 
 
 # API setting constants
@@ -542,7 +549,15 @@ def run_judge_pair(question, answer_a, answer_b, model, multi_turn=False, model_
         conv.append_message(conv.roles[1], None)
         conv.set_system_message(system_prompt)
         judgment = chat_completion_together(model, conv, temperature=0, max_tokens=2048)
-
+    elif model in DEEPSEEK_MDOEL_LIST:
+        template = "deepseek-chat"
+        conv = get_conv_template(template)
+        
+        conv.set_system_message(system_prompt)
+        conv.append_message(conv.roles[0], user_prompt)
+        conv.append_message(conv.roles[1], None)
+        
+        judgment = chat_completion_deepseek(model, conv, temperature=0, max_tokens=2048)
     else:
         raise ValueError(f"Model {model} not supported")
 
@@ -889,3 +904,47 @@ def chat_completion_openai(model, conv, temperature, max_tokens, api_dict=None):
             time.sleep(API_RETRY_SLEEP)
 
     return output
+
+def chat_completion_deepseek(model, conv, temperature, max_tokens, api_dict=None):
+    if api_dict is not None and "api_key" in api_dict:
+        api_key = api_dict["api_key"]
+    else:
+        api_key = os.environ["DEEPSEEK_API_KEY"]
+        
+    if api_dict is not None and "base_url" in api_dict:
+        base_url = api_dict["base_url"]
+    else:
+        base_url = os.environ["DEEPSEEK_BASE_URL"]
+
+    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+
+    output = API_ERROR_OUTPUT
+    for _ in range(API_MAX_RETRY):
+        try:
+            messages = conv.to_openai_api_messages()
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                n=1,
+            )
+            output = response.choices[0].message.content
+            break
+        except openai.APIError as e:
+            print(f"DeepSeek API returned an API Error: {e}")
+            time.sleep(API_RETRY_SLEEP)
+
+        except openai.APIConnectionError as e:
+            print(f"Failed to connect to DeepSeek API: {e}")
+            time.sleep(API_RETRY_SLEEP)
+
+        except openai.RateLimitError as e:
+            print(f"DeepSeek API request exceeded rate limit: {e}")
+            time.sleep(API_RETRY_SLEEP)
+
+        except Exception as e:
+            print(f"Unexpected error with DeepSeek API: {e}")
+            time.sleep(API_RETRY_SLEEP)
+
+    return output.strip()
