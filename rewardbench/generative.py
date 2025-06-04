@@ -30,6 +30,8 @@ from fastchat.conversation import get_conv_template
 from google.generativeai.types import HarmBlockThreshold, HarmCategory
 from openai import OpenAI
 from together import Together
+import torch
+import torch.nn.functional as F
 
 # normalize OpenAI exception names for compatibility with different SDK versions
 APIError = getattr(openai, "APIError", Exception)
@@ -173,7 +175,7 @@ MTBENCH_Scalar_V1 = {
     "prompt_template": "[User Question]\n{question}\n\n[The Start of Assistant A's Answer]\n{answer_a}\n[The End of Assistant A's Answer]\n\n[The Start of Assistant B's Answer]\n{answer_b}\n[The End of Assistant B's Answer]",
     "description": "Prompt for general questions",
     "category": "general",
-    "output_format": "boxed{10, 7}",
+    "output_format": "boxed{9, 7}",
 }
 
 MTBENCH_MULTI_V2 = {
@@ -493,7 +495,7 @@ def con_j_evaluate(gen):
     return "None"
 
 
-def process_judgement(judgment, model_modifier, scalar=False):
+def process_judgement(judgment, model_modifier, scalar=False, logprobs=None):
     if model_modifier == "prometheus":
         if "[RESULT]" in judgment:
             # after [RESULT] is A or B, else error (mayube spaces)
@@ -524,19 +526,84 @@ def process_judgement(judgment, model_modifier, scalar=False):
                 result = match.group(1).strip()
                 return result if result else "error"
     elif scalar:
-        # scalar output is boxed{10, 7} or similar
-        cleaned = re.sub(r"\\boxed{+(\d+),\s*(\d+)}+", r"\\boxed{\1, \2}", judgment)
-        match = re.search(r"\\boxed{(\d+),\s*(\d+)}", cleaned)
-        if match:
-            score_a = int(match.group(1))
-            score_b = int(match.group(2))
+        if logprobs is not None:
+            judgment = judgment.strip()
+            print("*************Judgment before processing:", judgment)
+            judgment = re.sub(r"\\+boxed", "boxed", judgment, flags=re.IGNORECASE)
+            judgment = re.sub(r"boxed\s*\{\s*\{", "boxed{", judgment)
+            judgment = re.sub(r"\}\s*\}", "}", judgment)
+            match = re.search(r"boxed\s*\{\s*(\d+)\s*,\s*(\d+)\s*\}", judgment, flags=re.IGNORECASE)
+            if not match:
+                return "error"
+            num_a, num_b = match.group(1), match.group(2)
+            def find_token_index(logprob_list, target_token):
+                for i in reversed(range(len(logprob_list))):
+                    _, logprob_obj = list(logprob_list[i].items())[0]
+                    if logprob_obj.decoded_token == target_token:
+                        return i
+                return None
+            idx_a = find_token_index(logprobs, num_a)
+            idx_b = find_token_index(logprobs, num_b)
+            if idx_a is None and idx_b is None:
+                return "error"
+            if idx_a is None and idx_b is not None:
+                idx_a = idx_b - 3
+            elif idx_b is None and idx_a is not None:
+                idx_b = idx_a - 3
+            # Finally compute the weighted score
+            def compute_weighted_score(logprob_list, idx):
+                score_tokens = [str(i) for i in range(0, 11)]
+                token_logprob_map = {}
+                for entry in logprob_list[idx].values():
+                    token_logprob_map[entry.decoded_token] = entry.logprob
+
+                selected_logprobs = []
+                for token in score_tokens:
+                    logp = token_logprob_map.get(token, float('-inf'))
+                    selected_logprobs.append(logp)
+
+                probs = torch.tensor(selected_logprobs, dtype=torch.float32)
+                probs = F.softmax(probs, dim=0)
+
+                weighted_score = sum(p.item() * (i + 1) for i, p in enumerate(probs))
+                return weighted_score
+            if num_a == '10':
+                score_a = 10.0
+            else:
+                score_a = compute_weighted_score(logprobs, idx_a)
+            if num_b == '10':
+                score_b = 10.0
+            else:
+                score_b = compute_weighted_score(logprobs, idx_b)
+            # Normal comparison
             if score_a > score_b:
                 return "A"
             elif score_b > score_a:
                 return "B"
             else:
                 return "error"
-        return "error"
+        else: 
+            # Normalize: remove surrounding whitespace, lowercase boxed, remove extra backslashes
+            judgment = judgment.strip()
+            judgment = re.sub(r"\\+boxed", "boxed", judgment, flags=re.IGNORECASE)
+            judgment = re.sub(r"boxed\s*\{\s*\{", "boxed{", judgment)
+            judgment = re.sub(r"\}\s*\}", "}", judgment)
+            match = re.search(r"boxed\s*\{\s*(\d+)\s*,\s*(\d+)\s*\}", judgment, flags=re.IGNORECASE)
+            
+            if not match:
+                # fallback: directly match numbers like "10, 7" at the end
+                match = re.search(r"(\d+)\s*,\s*(\d+)", judgment)
+            
+            if match:
+                score_a = int(match.group(1))
+                score_b = int(match.group(2))
+                if score_a > score_b:
+                    return "A"
+                elif score_b > score_a:
+                    return "B"
+                else:
+                    return "error"
+            return "error"
     else:
         if "[[A]]" in judgment:
             return "A"

@@ -37,6 +37,7 @@ from rewardbench.generative import (
     API_MODEL_LIST,
     GEMINI_MODEL_LIST,
     OPENAI_MODEL_LIST,
+    DEEPSEEK_MDOEL_LIST,
     format_judge_answers,
     process_judgement,
     run_judge_pair,
@@ -76,7 +77,7 @@ def get_args():
     )
     parser.add_argument("--num_gpus", type=int, default=1, help="number of gpus to use, for multi-node vllm")
     parser.add_argument("--vllm_gpu_util", type=float, default=0.9, help="gpu utilization for vllm")
-    # parser.add_argument("--vllm_max_seq_length", type=int, default=None, help="max sequence length for vllm")
+    parser.add_argument("--vllm_max_seq_length", type=int, default=4096, help="max sequence length for vllm")
     parser.add_argument("--do_not_save", action="store_true", help="do not save results to hub (for debugging)")
     parser.add_argument(
         "--pref_sets", action="store_true", help="run on common preference sets instead of our custom eval set"
@@ -150,21 +151,31 @@ def main():
             trust_remote_code=args.trust_remote_code,
             tensor_parallel_size=args.num_gpus,
             gpu_memory_utilization=args.vllm_gpu_util,
-            # max_seq_length=args.vllm_max_seq_length,
+            max_model_len=args.vllm_max_seq_length,
         )
         tokenizer = AutoTokenizer.from_pretrained(args.model)
         if "Llama-3" in args.model or "llama3-8b" in args.model and "3.1" not in args.model:
             stop_token_ids = [128009]
         else:
             stop_token_ids = None
-
-        sampling_params = SamplingParams(
-            n=1,
-            temperature=0,
-            top_p=1,
-            max_tokens=2048,
-            stop_token_ids=stop_token_ids,
-        )
+        
+        if args.use_weighted:
+            sampling_params = SamplingParams(
+                n=1,
+                temperature=0,
+                top_p=1,
+                max_tokens=2048,
+                stop_token_ids=stop_token_ids,
+                logprobs=20
+            )
+        else:
+            sampling_params = SamplingParams(
+                n=1,
+                temperature=0,
+                top_p=1,
+                max_tokens=2048,
+                stop_token_ids=stop_token_ids,
+            )
 
     # handle off-case models
     # use different prompt for prometheus/gemini models
@@ -361,7 +372,8 @@ def main():
         logger.info("*** Inference done ***")
 
         answers = [o.outputs[0].text for o in outputs]
-        winners = [process_judgement(a, model_modifier, args.scalar) for a in answers]
+        logprobs = [o.outputs[0].logprobs for o in outputs] if args.use_weighted else None
+        winners = [process_judgement(a, model_modifier, args.scalar, logprobs=logprob) for a, logprob in zip(answers, logprobs)]
 
         def process_shuffled(win, shuffle):
             if shuffle:
@@ -403,6 +415,8 @@ def main():
         model_name = "anthropic/" + model_name
     elif args.model in GEMINI_MODEL_LIST:
         model_name = "google/" + model_name
+    elif args.model in DEEPSEEK_MDOEL_LIST:
+        model_name = "deepseek/" + model_name
 
     # get core dataset
     results_grouped = {}

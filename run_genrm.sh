@@ -13,13 +13,14 @@ SCORE_WITH_RATINGS=""
 
 # GPU 设置
 NUM_GPUS=1
-VLLM_GPU_UTIL=0.8
+VLLM_GPU_UTIL=0.9
 
 # 线程数
 NUM_THREADS=10
 
 # 其它 flags，可以按需开启
 DEBUG="--debug"
+# DEBUG=""
 FORCE_LOCAL="--force_local"
 # FORCE_LOCAL=""
 DO_NOT_SAVE="--do_not_save"
@@ -27,6 +28,8 @@ DISABLE_BEAKER_SAVE="--disable_beaker_save"
 PREF_SETS=""
 SCALAR="--scalar"
 # SCALAR=""
+USE_WEIGHTED="--use_weighted"
+# USE_WEIGHTED=""
 
 # 执行脚本
 python ./scripts/run_generative.py \
@@ -37,6 +40,7 @@ python ./scripts/run_generative.py \
   --vllm_gpu_util $VLLM_GPU_UTIL \
   --num_threads $NUM_THREADS \
   $SCALAR \
+  $USE_WEIGHTED \
   $DEBUG \
   $FORCE_LOCAL \
   $DO_NOT_SAVE \
